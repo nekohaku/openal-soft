@@ -172,7 +172,13 @@ stdout
 #endif
 };
 #ifdef _DEBUG
-LogLevel gLogLevel{LogLevel::Warning};
+LogLevel gLogLevel{
+#ifndef OO
+LogLevel::Warning
+#else
+LogLevel::Trace
+#endif
+};
 #else
 LogLevel gLogLevel{LogLevel::Error};
 #endif

@@ -348,6 +348,7 @@ void SceAudioOutBackend::open(const char *name) {
     std::fill(mBuffer.begin(), mBuffer.end(), al::byte{});
     /* sooo for a stereo s16 this buffer should be 256*2 in size */
 
+    TRACE("userId=%d,porttype=%d,updsize=%u,mfreq=%u,datafmt=%d", userId, porttype, mUpdateSize, mFrequency, sonyDataFmt);
     scehandle = msceAudioOutOpen(userId, porttype, 0 /* device index:unused */, mUpdateSize, mFrequency, static_cast<uint>(sonyDataFmt));
     if (scehandle < 0) {
         throw al::backend_exception{al::backend_error::DeviceError, "Unable to open audio handle 0x%X", scehandle};
