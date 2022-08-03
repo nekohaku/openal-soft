@@ -151,6 +151,9 @@
 #ifdef HAVE_SDL2
 #include "backends/sdl2.h"
 #endif
+#ifdef HAVE_SCEAUDIOOUT
+#include "backends/sceaudioout.h"
+#endif
 #ifdef HAVE_WAVE
 #include "backends/wave.h"
 #endif
@@ -161,7 +164,13 @@
 #endif // ALSOFT_EAX
 
 
-FILE *gLogFile{stderr};
+FILE *gLogFile{
+#ifndef OO
+stderr
+#else
+stdout
+#endif
+};
 #ifdef _DEBUG
 LogLevel gLogLevel{LogLevel::Warning};
 #else
@@ -249,6 +258,9 @@ BackendInfo BackendList[] = {
 #endif
 #ifdef HAVE_SDL2
     { "sdl2", SDL2BackendFactory::getFactory },
+#endif
+#ifdef HAVE_SCEAUDIOOUT
+    { "sceaudioout", SceAudioOutBackendFactory::getFactory },
 #endif
 
     { "null", NullBackendFactory::getFactory },

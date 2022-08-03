@@ -364,13 +364,24 @@ void ReadALConfig()
 
 void ReadALConfig()
 {
-    const char *str{"/etc/openal/alsoft.conf"};
+    const char *str{
+#ifndef PS4
+        "/etc/openal/alsoft.conf"
+#else
+        "/app0/assets/misc/alsoft.conf"
+#endif
+    };
 
     TRACE("Loading config %s...\n", str);
     al::ifstream f{str};
     if(f.is_open())
         LoadConfigFromFile(f);
     f.close();
+
+#ifdef PS4
+    /* nope, don't even try */
+    return;
+#endif
 
     std::string confpaths{al::getenv("XDG_CONFIG_DIRS").value_or("/etc/xdg")};
     /* Go through the list in reverse, since "the order of base directories

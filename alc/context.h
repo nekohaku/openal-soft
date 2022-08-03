@@ -152,7 +152,11 @@ struct ALCcontext : public al::intrusive_ref<ALCcontext>, ContextBase {
 
 private:
     /* Thread-local current context. */
-    static thread_local ALCcontext *sLocalContext;
+    static
+#ifndef OO
+    thread_local
+#endif
+    ALCcontext *sLocalContext;
 
     /* Thread-local context handling. This handles attempting to release the
      * context which may have been left current when the thread is destroyed.
@@ -162,7 +166,12 @@ private:
         ~ThreadCtx();
         void set(ALCcontext *ctx) const noexcept { sLocalContext = ctx; }
     };
-    static thread_local ThreadCtx sThreadContext;
+    
+    static
+#ifndef OO
+    thread_local
+#endif
+    ThreadCtx sThreadContext;
 
 public:
     /* HACK: MinGW generates bad code when accessing an extern thread_local

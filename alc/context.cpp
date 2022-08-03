@@ -85,7 +85,10 @@ constexpr ALchar alExtList[] =
 
 std::atomic<ALCcontext*> ALCcontext::sGlobalContext{nullptr};
 
-thread_local ALCcontext *ALCcontext::sLocalContext{nullptr};
+#ifndef OO
+thread_local
+#endif
+ALCcontext *ALCcontext::sLocalContext{nullptr};
 ALCcontext::ThreadCtx::~ThreadCtx()
 {
     if(ALCcontext *ctx{ALCcontext::sLocalContext})
@@ -95,7 +98,10 @@ ALCcontext::ThreadCtx::~ThreadCtx()
             result ? "" : ", leak detected");
     }
 }
-thread_local ALCcontext::ThreadCtx ALCcontext::sThreadContext;
+#ifndef OO
+thread_local
+#endif
+ALCcontext::ThreadCtx ALCcontext::sThreadContext;
 
 ALeffect ALCcontext::sDefaultEffect;
 

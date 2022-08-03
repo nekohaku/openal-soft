@@ -45,9 +45,11 @@ namespace al {
 
 al::optional<std::string> getenv(const char *envname)
 {
+#ifndef PS4
     const char *str{std::getenv(envname)};
     if(str && str[0] != '\0')
         return al::make_optional<std::string>(str);
+#endif /* We don't have environment variables on a PS4 */
     return al::nullopt;
 }
 

@@ -1,0 +1,39 @@
+{
+    "configurations": [
+        {
+            "name": "OOPS4",
+            "includePath": [
+                "${env:OO_PS4_TOOLCHAIN}/include/c++/v1/**",
+                "${env:OO_PS4_TOOLCHAIN}/include/**",
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/include/**",
+                "${workspaceFolder}/common/**"
+            ],
+            "defines": [
+                "PS4",
+                "OO",
+                "__PS4__",
+                "OOPS4",
+                "ORBIS",
+                "__ORBIS__",
+                "__PIGLET__",
+                "RESTRICT=__restrict",
+                "_BSD_SOURCE=1",
+                "__BSD_VISIBLE=1",
+                "_DEBUG=1"
+            ],
+            "compilerPath": "D:\\SDK\\LLVM10\\bin\\clang++.exe",
+            "cStandard": "c17",
+            "cppStandard": "c++14",
+            "intelliSenseMode": "linux-clang-x64",
+            "compilerArgs": [
+                "--target=x86_64-pc-freebsd12-elf",
+                "-fPIC",
+                "-funwind-tables",
+                "-fexceptions",
+                "-fcxx-exceptions"
+            ]
+        }
+    ],
+    "version": 4
+}
