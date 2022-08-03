@@ -46,13 +46,11 @@
 #include <orbis/UserService.h>
 #include <orbis/AudioOut.h>
 #include <orbis/AudioIn.h>
-#define NIKAL_USER_ID_LIST_TYPE OrbisUserServiceLoginUserIdList
 #else
 /* Sony SDK, not tested, use with caution, do NOT ask. */
 #include <user_service.h>
 #include <audioout.h>
 #include <audioin.h>
-#define NIKAL_USER_ID_LIST_TYPE SceUserServiceLoginUserIdList
 #endif /* !OOPS4 */
 
 /*
@@ -143,10 +141,12 @@ struct SceAudioOutBackend final : public BackendBase {
     using sceAudioOutOpen_t = int(*)(int, int, int, uint, uint, uint);
     using sceAudioOutOutput_t = int(*)(int /* handle */, const void* /* sound data, GRAIN * CHANNELS * SIZEOF_int_OR_float */);
     using sceAudioOutClose_t = int(*)(int /* handle */);
+    using sceUserServiceGetLoginUserIdList_t = int(*)(NikalUserServiceLoginUserIdList* /* out list */);
 
     sceAudioOutOpen_t msceAudioOutOpen{reinterpret_cast<sceAudioOutOpen_t>(sceAudioOutOpen)};
     sceAudioOutOutput_t msceAudioOutOutput{reinterpret_cast<sceAudioOutOutput_t>(sceAudioOutOutput)};
     sceAudioOutClose_t msceAudioOutClose{reinterpret_cast<sceAudioOutClose_t>(sceAudioOutClose)};
+    sceUserServiceGetLoginUserIdList_t msceUserServiceGetLoginUserIdList{reinterpret_cast<sceUserServiceGetLoginUserIdList_t>(sceUserServiceGetLoginUserIdList)};
 
     DEF_NEWDEL(SceAudioOutBackend)
 };
@@ -178,39 +178,21 @@ int SceAudioOutBackend::mixerProc() {
 
     /* i have no idea what I'm doing */
     const size_t frame_step{mDevice->channelsFromFmt()};
-    const size_t frame_size{mDevice->frameSizeFromFmt()};
     int ok{-1}; /* sce error code, 0 is success */
 
-    while (!mKillNow.load(std::memory_order_acquire)) {
-        al::span<al::byte> buffer{mBuffer};
-        auto bufferptr{buffer.data()};
-        auto buffersiz{buffer.size()};
-
-        mDevice->renderSamples(bufferptr, static_cast<uint>(buffersiz / frame_size), frame_step);
+    while (!mKillNow.load(std::memory_order_acquire) && mDevice->Connected.load(std::memory_order_acquire)) {
+        mDevice->renderSamples(mBuffer.data(), static_cast<uint>(mBuffer.size() / mFrameSize), frame_step);
         
         /* should output GRAIN(256) * CHANNCOUNT() */
-        ok = msceAudioOutOutput(mDeviceID, buffer.data());
+        ok = msceAudioOutOutput(mDeviceID, mBuffer.data());
         if (ok < 0) {
             /* failed to output sound! */
             mDevice->handleDisconnect("SceAudioOutError .data() 0x%X", ok);
             break;
         }
-
-        ok = msceAudioOutOutput(mDeviceID, nullptr);
-        if (ok < 0) {
-            /* failed to output sound! */
-            mDevice->handleDisconnect("SceAudioOutError nullptr 0x%X", ok);
-            break;
-        }
     }
 
-    if (ok >= 0) {
-        /* last error code was OK then we must wait for data to output and return gracefully */
-        ok = msceAudioOutOutput(mDeviceID, nullptr);
-        if (ok < 0) {
-            mDevice->handleDisconnect("SceAudioOutError nullptr outer 0x%X", ok);
-        }
-    }
+    msceAudioOutOutput(mDeviceID, nullptr);
 
     /* no sound should be playing when we reach this line, can return */
     return 0;
@@ -253,7 +235,7 @@ void SceAudioOutBackend::open(const char *name) {
     }
 
     /* cast into SDK-appropriate type */
-    if ((ok = sceUserServiceGetLoginUserIdList(reinterpret_cast<NIKAL_USER_ID_LIST_TYPE*>(&usersList))) < 0) {
+    if ((ok = msceUserServiceGetLoginUserIdList(&usersList)) < 0) {
         throw al::backend_exception{al::backend_error::DeviceError, "Unable to enumerate users 0x%X", ok};
     }
 
@@ -336,17 +318,8 @@ void SceAudioOutBackend::open(const char *name) {
     mFrequency = static_cast<uint>(freq);
     mFmtChans = static_cast<DevFmtChannels>(alChanFmt);
     mFmtType = static_cast<DevFmtType>(alDataFmt);
-    mUpdateSize = clampu(
-        mDevice->UpdateSize,
-        64 * 4, /* minimum allowed SceAudioOut port 'granularity' */
-        64 * 32 /* maximum allowed SceAudioOut port 'granularity' */
-    );
-    mFrameSize = BytesFromDevFmt(mFmtType) * ChannelsFromDevFmt(mFmtChans, 0 /* we never use ambisonic in SceAudio */);
-    mBuffer.resize(mUpdateSize * ChannelsFromDevFmt(mFmtChans, 0 /* we never use ambisonic in SceAudio */));
-
-    /* fill the buffer with zeroes */
-    std::fill(mBuffer.begin(), mBuffer.end(), al::byte{});
-    /* sooo for a stereo s16 this buffer should be 256*2 in size */
+    mFrameSize = BytesFromDevFmt(mFmtType) * ChannelsFromDevFmt(mFmtChans, mDevice->mAmbiOrder);
+    mUpdateSize = (64 * 16); /* closest to the default update size (960) except PS4 only accepts multiples of 64 */
 
     TRACE("userId=%d,porttype=%d,updsize=%u,mfreq=%u,datafmt=%d", userId, porttype, mUpdateSize, mFrequency, sonyDataFmt);
     scehandle = msceAudioOutOpen(userId, porttype, 0 /* device index:unused */, mUpdateSize, mFrequency, static_cast<uint>(sonyDataFmt));
@@ -354,10 +327,20 @@ void SceAudioOutBackend::open(const char *name) {
         throw al::backend_exception{al::backend_error::DeviceError, "Unable to open audio handle 0x%X", scehandle};
     }
 
+    mBuffer.resize(mUpdateSize * mFrameSize);
+
+    /* fill the buffer with zeroes */
+    std::fill(mBuffer.begin(), mBuffer.end(), al::byte{});
+    /* sooo for a stereo s16 this buffer should be 256*2 in size */
+
     mDeviceID = scehandle;
-    
-    /* ????????????????????? */
-    reset();
+    mDevice->DeviceName = name;
+    mDevice->Frequency = mFrequency;
+    mDevice->FmtChans = mFmtChans;
+    mDevice->FmtType = mFmtType;
+    mDevice->UpdateSize = mUpdateSize;
+
+    /* BufferSize is never touched or written to here...*/
 }
 
 bool SceAudioOutBackend::reset() {
@@ -365,7 +348,7 @@ bool SceAudioOutBackend::reset() {
     mDevice->FmtChans = mFmtChans;
     mDevice->FmtType = mFmtType;
     mDevice->UpdateSize = mUpdateSize;
-    mDevice->BufferSize = static_cast<uint>(mBuffer.size());
+    mDevice->BufferSize = mUpdateSize * DEFAULT_NUM_UPDATES;
     /* thanks kcat! */
     setDefaultWFXChannelOrder();
     return true;
@@ -412,6 +395,10 @@ struct SceAudioInCapture final : public BackendBase {
     DevFmtType mFmtType{};
     DevFmtChannels mFmtChannels{};
     uint mFrequency{};
+    uint mFrameSize{};
+    uint mUpdateSize{};
+
+    al::vector<al::byte> mCaptureBuffer{};
 
     /*
         OpenOrbis doesn't have correct headers for SceAudioIn,
@@ -422,11 +409,13 @@ struct SceAudioInCapture final : public BackendBase {
     using sceAudioInClose_t = int(*)(int /* handle */);
     using sceAudioInInput_t = int(*)(int /* handle */, void* /* data buffer */);
     using sceAudioInGetSilentState_t = int(*)(int /* handle */);
+    using sceUserServiceGetLoginUserIdList_t = int(*)(NikalUserServiceLoginUserIdList* /* out list */);
 
     sceAudioInOpen_t msceAudioInOpen{reinterpret_cast<sceAudioInOpen_t>(sceAudioInOpen)};
     sceAudioInClose_t msceAudioInClose{reinterpret_cast<sceAudioInClose_t>(sceAudioInClose)};
     sceAudioInInput_t msceAudioInInput{reinterpret_cast<sceAudioInInput_t>(sceAudioInInput)};
     sceAudioInGetSilentState_t msceAudioInGetSilentState{reinterpret_cast<sceAudioInGetSilentState_t>(sceAudioInGetSilentState)};
+    sceUserServiceGetLoginUserIdList_t msceUserServiceGetLoginUserIdList{reinterpret_cast<sceUserServiceGetLoginUserIdList_t>(sceUserServiceGetLoginUserIdList)};
 
     DEF_NEWDEL(SceAudioInCapture)
 };
@@ -451,11 +440,46 @@ const int CaptureDeviceUserIds[] = {
 };
 
 SceAudioInCapture::~SceAudioInCapture() {
+    int ok{-1};
+
     if (mDeviceID >= 0) {
+        TRACE("Stopping SceAudioInCapture from dtor");
         stop();
-        msceAudioInClose(mDeviceID);
+
+        /* kill it with fire */
+        ok = msceAudioInClose(mDeviceID);
+        if (ok < 0) {
+            ERR("sceAudioInClose error 0x%X", ok);
+        }
+
         mDeviceID = -1;
     }
+
+    TRACE("SceAudioInCapture dtor");
+}
+
+int SceAudioInCapture::recordProc() {
+    /*
+        PS4-specific way to rename a thread and set the highest prio
+    */
+    scePthreadSetprio(pthread_self(), 256 /* HIGHEST */);
+    scePthreadRename(pthread_self(), RECORD_THREAD_NAME);
+
+    int ok{-1};
+
+    while (!mKillNow.load(std::memory_order_acquire) && mDevice->Connected.load(std::memory_order_acquire)) {
+        ok = msceAudioInInput(mDeviceID, mCaptureBuffer.data());
+        if (ok < 0) {
+            mDevice->handleDisconnect("SceAudioInCapture backend read fail: 0x%X", ok);
+            break;
+        }
+
+        // `ok` is in samples so no need to div or mul
+        mRing->write(mCaptureBuffer.data(), static_cast<size_t>(ok));
+    }
+
+    msceAudioInInput(mDeviceID, nullptr);
+    return 0;
 }
 
 void SceAudioInCapture::open(const char *name) {
@@ -468,12 +492,14 @@ void SceAudioInCapture::open(const char *name) {
         freq{16000}, /* SceAudioIn only supports this frequency */
         scehandle{-1},
         userId{-1},
-        granularity{256};
+        granularity{256},
+        type{-1};
     
     NikalUserServiceLoginUserIdList usersList;
 
     if (!name || 0 == strlen(name)) {
         // assume "GENERAL1" port by default
+        // BAD BAD BAD BAD IDEA, the game must specify which user they wanna listen to EXPLICITLY
         indexInTable = 0;
         name = CaptureDeviceNames[indexInTable].c_str();
     }
@@ -492,7 +518,7 @@ void SceAudioInCapture::open(const char *name) {
         throw al::backend_exception{al::backend_error::NoDevice, "Invalid device name '%s'", name};
     }
 
-    if ((ok = sceUserServiceGetLoginUserIdList(reinterpret_cast<NIKAL_USER_ID_LIST_TYPE*>(&usersList))) < 0) {
+    if ((ok = msceUserServiceGetLoginUserIdList(&usersList)) < 0) {
         throw al::backend_exception{al::backend_error::DeviceError, "Unable to enumerate users 0x%X", ok};
     }
 
@@ -502,44 +528,72 @@ void SceAudioInCapture::open(const char *name) {
         throw al::backend_exception{al::backend_error::DeviceError, "Invalid user id 0x%X", ok};
     }
 
-    alDataFmt = DevFmtShort;
-    switch (mDevice->FmtChans) {
-        case DevFmtMono: {
-            sonyDataFmt = 0; // S16LE Mono
-            alChannFmt = DevFmtMono;
-            break;
-        }
+    type = CaptureDevicePorts[indexInTable];
 
-        default: {
-            sonyDataFmt = 2; // S16LE Stereo
-            alChannFmt = DevFmtStereo;
-            break;
-        }
-    }
+    /* SceAudioIn only properly supports S16LE Mono, sadly */
+    /* kinda makes sense, there is only one microphone, how can it even possibly record stereo???? */
+    alDataFmt = DevFmtShort;
+    alChannFmt = DevFmtMono;
+    sonyDataFmt = 0; /* S16 Mono */
 
     mFmtType = static_cast<DevFmtType>(alDataFmt);
     mFmtChannels = static_cast<DevFmtChannels>(alChannFmt);
     mFrequency = static_cast<uint>(freq);
+    mFrameSize = BytesFromDevFmt(mFmtType) * ChannelsFromDevFmt(mFmtChannels, mDevice->mAmbiOrder);
+    mUpdateSize = static_cast<uint>(granularity);
+
+    TRACE("userId=%d,updsiz=%u,type=%d", userId, mUpdateSize, type);
+    scehandle = msceAudioInOpen(
+        userId,
+        static_cast<uint>(type), 
+        0, /* device index:unused */
+        mUpdateSize,
+        mFrequency,
+        static_cast<uint>(sonyDataFmt)
+    );
+
+    if (scehandle < 0) {
+        throw al::backend_exception{al::backend_error::DeviceError,
+            "sceAudioInOpen failure: 0x%X", scehandle};
+    }
+
+    /*
+        DO NOT overwrite mDevice->BufferSize or UpdateSize here!
+        these are supplied by the user
+    */
+    mRing = RingBuffer::Create(static_cast<size_t>(mDevice->BufferSize), mFrameSize, false);
+
+    /* allocate a bytebuffer to store one update */
+    mCaptureBuffer.resize(mUpdateSize * mFrameSize);
+    std::fill(mCaptureBuffer.begin(), mCaptureBuffer.end(), al::byte{});
+
     mDevice->FmtType = mFmtType;
     mDevice->FmtChans = mFmtChannels;
     mDevice->Frequency = mFrequency;
     mDevice->DeviceName = name;
-
-
-    // OpenOrbis does not have the correct handles for SceAudioIn as of August 2nd 2022
-    // do a recast :D
-    
-
+    mDeviceID = scehandle;
     
     // SceAudioIn only supports Signed 16 LE format
 }
 
 void SceAudioInCapture::start() {
-    /* TODO !*/
+    try {
+        mKillNow.store(false, std::memory_order_release);
+        mThread = std::thread{std::mem_fn(&SceAudioInCapture::recordProc), this};
+        TRACE("Capture thread started");
+    }
+    catch(std::exception& e) {
+        throw al::backend_exception{al::backend_error::DeviceError,
+            "Failed to start capture thread: %s", e.what()};
+    }
 }
 
 void SceAudioInCapture::stop() {
-    /* TODO !*/
+    if (mKillNow.exchange(true, std::memory_order_acq_rel) || !mThread.joinable())
+        return;
+    
+    mThread.join();
+    TRACE("SceAudioInCapture stop successful.");
 }
 
 uint SceAudioInCapture::availableSamples() {

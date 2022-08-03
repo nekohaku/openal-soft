@@ -270,4 +270,4 @@ def do_build():
 print(f"> Build result = {do_build()}")
 
 # remove later
-os.system("pause")
+#os.system("pause")
