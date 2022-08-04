@@ -209,7 +209,10 @@ void SceAudioOutBackend::open(const char *name) {
         alChanFmt{-1}, /* AL channel format constant */
         alDataFmt{-1}, /* AL data format constant */
         scehandle{-1}, /* SceAudioOut port handle */
-        porttype{-1};
+        porttype{-1},
+        fallbackChanFmt{-1},
+        fallbackSonySFmt{-1},
+        fallbackSonyFFmt{-1};
     
     NikalUserServiceLoginUserIdList usersList;
 
@@ -251,7 +254,31 @@ void SceAudioOutBackend::open(const char *name) {
     /*
         SceAudioOut only supports either Short16LE or Float32LE as data format.
         Mono, Stereo, or 7.1(STD?)
+
+        MAIN - 7.1, stereo, mono
+        BGM - 7.1, stereo, mono
+        VOICE - stereo, mono
+        PERSONAL - stereo, mono
+        PADSPK - mono
+        AUX - 7.1, stereo, mono
     */
+    porttype = DevicePorts[indexInTable];
+    // MAIN, BGM, AUX, 7.1 is supported usually
+    fallbackChanFmt = DevFmtX71;
+    fallbackSonySFmt = 6; // S16 8CH STD
+    fallbackSonyFFmt = 7; // Float 8CH STD
+    if (porttype == 4) {
+        // PADSPK, mono only
+        fallbackChanFmt = DevFmtMono;
+        fallbackSonySFmt = 0; // S16 Mono
+        fallbackSonyFFmt = 3; // Float Mono
+    }
+    else if (porttype == 2 || porttype == 3) {
+        // PERSONAL or VOICE, stereo or mono only
+        fallbackChanFmt = DevFmtStereo;
+        fallbackSonySFmt = 1; // S16 Stereo
+        fallbackSonyFFmt = 4; // Float Stereo
+    }
 
     switch (mDevice->FmtType) {
         case DevFmtUByte:
@@ -269,14 +296,16 @@ void SceAudioOutBackend::open(const char *name) {
                 }
 
                 case DevFmtStereo: {
-                    sonyDataFmt = 1; /* S16 Stereo */
-                    alChanFmt = DevFmtStereo;
-                    break;
+                    if (porttype != 4 /* PADSPK */) {
+                        sonyDataFmt = 1; /* S16 Stereo */
+                        alChanFmt = DevFmtStereo;
+                        break;
+                    }
                 }
 
                 default: {
-                    sonyDataFmt = 6; /* S16 8CH 'STD layout' */
-                    alChanFmt = DevFmtX71;
+                    sonyDataFmt = fallbackSonySFmt;
+                    alChanFmt = fallbackChanFmt;
                     break;
                 }
             }
@@ -296,14 +325,16 @@ void SceAudioOutBackend::open(const char *name) {
                 }
 
                 case DevFmtStereo: {
-                    sonyDataFmt = 4; /* Float Stereo */
-                    alChanFmt = DevFmtStereo;
-                    break;
+                    if (porttype != 4 /* PADSPK */) {
+                        sonyDataFmt = 4; /* Float Stereo */
+                        alChanFmt = DevFmtStereo;
+                        break;
+                    }
                 }
 
                 default: {
-                    sonyDataFmt = 7; /* Float 8CH 'STD layout' */
-                    alChanFmt = DevFmtX71;
+                    sonyDataFmt = fallbackSonyFFmt;
+                    alChanFmt = fallbackChanFmt;
                     break;
                 }
             }
@@ -311,8 +342,6 @@ void SceAudioOutBackend::open(const char *name) {
             break;
         }
     }
-
-    porttype = DevicePorts[indexInTable];
 
     mFrequency = static_cast<uint>(freq);
     mFmtChans = static_cast<DevFmtChannels>(alChanFmt);
@@ -335,8 +364,8 @@ void SceAudioOutBackend::open(const char *name) {
             : validGranulas[validGranulasLen - 1];
 
     /* and then attempt to round to largest (or the same) if in-between ... */
-    for (size_t i{0}; i < (validGranulasLen - 1); ++i) {
-        auto v{validGranulas[i]}, vn{validGranulas[i + 1]};
+    for (size_t g{0}; g < (validGranulasLen - 1); ++g) {
+        auto v{validGranulas[g]}, vn{validGranulas[g + 1]};
 
         if (mDevice->UpdateSize > v && mDevice->UpdateSize <= vn) {
             mUpdateSize = vn;
