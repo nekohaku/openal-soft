@@ -192,6 +192,7 @@ int SceAudioOutBackend::mixerProc() {
         }
     }
 
+    /* wait for samples to finish playing (if any) */
     msceAudioOutOutput(mDeviceID, nullptr);
 
     /* no sound should be playing when we reach this line, can return */
@@ -211,8 +212,6 @@ void SceAudioOutBackend::open(const char *name) {
         porttype{-1};
     
     NikalUserServiceLoginUserIdList usersList;
-
-    TRACE("SceAudioOutBackend::open %s", name);
 
     if (!name || 0 == strlen(name)) {
         /* assume "MAIN" device as default */
@@ -319,7 +318,38 @@ void SceAudioOutBackend::open(const char *name) {
     mFmtChans = static_cast<DevFmtChannels>(alChanFmt);
     mFmtType = static_cast<DevFmtType>(alDataFmt);
     mFrameSize = BytesFromDevFmt(mFmtType) * ChannelsFromDevFmt(mFmtChans, mDevice->mAmbiOrder);
-    mUpdateSize = (64 * 16); /* closest to the default update size (960) except PS4 only accepts multiples of 64 */
+
+    /*
+        Valid port granularity values:
+    */
+    const uint validGranulas[]{
+        /* 256, 512,    768,     1024,    1280,    1536,    1792,    2048 */
+        64 * 4, 64 * 8, 64 * 12, 64 * 16, 64 * 20, 64 * 24, 64 * 28, 64 * 32
+    };
+    const uint validGranulasLen{sizeof(validGranulas) / sizeof(validGranulas[0])};
+
+    /* make a very quick initial guess */
+    mUpdateSize =
+        (mDevice->UpdateSize <= validGranulas[0])
+            ? validGranulas[0]
+            : validGranulas[validGranulasLen - 1];
+
+    /* and then attempt to round to largest (or the same) if in-between ... */
+    for (size_t i{0}; i < (validGranulasLen - 1); ++i) {
+        auto v{validGranulas[i]}, vn{validGranulas[i + 1]};
+
+        if (mDevice->UpdateSize > v && mDevice->UpdateSize <= vn) {
+            mUpdateSize = vn;
+            break;
+        }
+    }
+    /*
+        so if you pass 9999 it will choose 2048,
+        if you pass 1024 which is a valid len, it will choose 1024,
+        if you pass 960 it will choose 1024,
+        if you pass 100 it will choose 256,
+        if you pass 257 it will choose 512 and so on and so on...
+    */
 
     TRACE("userId=%d,porttype=%d,updsize=%u,mfreq=%u,datafmt=%d", userId, porttype, mUpdateSize, mFrequency, sonyDataFmt);
     scehandle = msceAudioOutOpen(userId, porttype, 0 /* device index:unused */, mUpdateSize, mFrequency, static_cast<uint>(sonyDataFmt));
@@ -327,6 +357,7 @@ void SceAudioOutBackend::open(const char *name) {
         throw al::backend_exception{al::backend_error::DeviceError, "Unable to open audio handle 0x%X", scehandle};
     }
 
+    /* a buffer to hold one update */
     mBuffer.resize(mUpdateSize * mFrameSize);
 
     /* fill the buffer with zeroes */
@@ -339,8 +370,7 @@ void SceAudioOutBackend::open(const char *name) {
     mDevice->FmtChans = mFmtChans;
     mDevice->FmtType = mFmtType;
     mDevice->UpdateSize = mUpdateSize;
-
-    /* BufferSize is never touched or written to here...*/
+    mDevice->BufferSize = mUpdateSize;
 }
 
 bool SceAudioOutBackend::reset() {
@@ -348,7 +378,7 @@ bool SceAudioOutBackend::reset() {
     mDevice->FmtChans = mFmtChans;
     mDevice->FmtType = mFmtType;
     mDevice->UpdateSize = mUpdateSize;
-    mDevice->BufferSize = mUpdateSize * DEFAULT_NUM_UPDATES;
+    mDevice->BufferSize = mUpdateSize;
     /* thanks kcat! */
     setDefaultWFXChannelOrder();
     return true;
@@ -408,13 +438,12 @@ struct SceAudioInCapture final : public BackendBase {
     using sceAudioInOpen_t = int(*)(int, uint, uint, uint, uint, uint);
     using sceAudioInClose_t = int(*)(int /* handle */);
     using sceAudioInInput_t = int(*)(int /* handle */, void* /* data buffer */);
-    using sceAudioInGetSilentState_t = int(*)(int /* handle */);
     using sceUserServiceGetLoginUserIdList_t = int(*)(NikalUserServiceLoginUserIdList* /* out list */);
 
     sceAudioInOpen_t msceAudioInOpen{reinterpret_cast<sceAudioInOpen_t>(sceAudioInOpen)};
+    sceAudioInOpen_t msceAudioInHqOpen{reinterpret_cast<sceAudioInOpen_t>(sceAudioInHqOpen)};
     sceAudioInClose_t msceAudioInClose{reinterpret_cast<sceAudioInClose_t>(sceAudioInClose)};
     sceAudioInInput_t msceAudioInInput{reinterpret_cast<sceAudioInInput_t>(sceAudioInInput)};
-    sceAudioInGetSilentState_t msceAudioInGetSilentState{reinterpret_cast<sceAudioInGetSilentState_t>(sceAudioInGetSilentState)};
     sceUserServiceGetLoginUserIdList_t msceUserServiceGetLoginUserIdList{reinterpret_cast<sceUserServiceGetLoginUserIdList_t>(sceUserServiceGetLoginUserIdList)};
 
     DEF_NEWDEL(SceAudioInCapture)
@@ -444,6 +473,7 @@ SceAudioInCapture::~SceAudioInCapture() {
 
     if (mDeviceID >= 0) {
         TRACE("Stopping SceAudioInCapture from dtor");
+        /* must wait until all processing is done, the thread will do that for us */
         stop();
 
         /* kill it with fire */
@@ -478,6 +508,7 @@ int SceAudioInCapture::recordProc() {
         mRing->write(mCaptureBuffer.data(), static_cast<size_t>(ok));
     }
 
+    /* must wait until all input is sent for the port to close */
     msceAudioInInput(mDeviceID, nullptr);
     return 0;
 }
@@ -530,11 +561,24 @@ void SceAudioInCapture::open(const char *name) {
 
     type = CaptureDevicePorts[indexInTable];
 
-    /* SceAudioIn only properly supports S16LE Mono, sadly */
-    /* kinda makes sense, there is only one microphone, how can it even possibly record stereo???? */
-    alDataFmt = DevFmtShort;
-    alChannFmt = DevFmtMono;
-    sonyDataFmt = 0; /* S16 Mono */
+    /* Either use the regular s16 mono 16khz or the HQ s16 stereo 48khz port */
+    alDataFmt = static_cast<int>(mDevice->FmtType);
+    alChannFmt = static_cast<int>(mDevice->FmtChans);
+    freq = static_cast<int>(mDevice->Frequency);
+    if (alDataFmt == DevFmtShort && alChannFmt == DevFmtMono && freq == 16000) {
+        sonyDataFmt = 0; /* S16 Mono */
+        granularity = 256;
+    }
+    else if (alDataFmt == DevFmtShort && alChannFmt == DevFmtStereo && freq == 48000) {
+        sonyDataFmt = 2; /* S16 Stereo */
+        granularity = 128;
+    }
+    else {
+        /* too lazy to resample stuff, meh */
+        throw al::backend_exception{al::backend_error::DeviceError,
+            "Invalid capture parameters, you must use freq=16000,format=AL_FORMAT_MONO16 or freq=48000,format=AL_FORMAT_STEREO16"
+        };
+    }
 
     mFmtType = static_cast<DevFmtType>(alDataFmt);
     mFmtChannels = static_cast<DevFmtChannels>(alChannFmt);
@@ -543,7 +587,8 @@ void SceAudioInCapture::open(const char *name) {
     mUpdateSize = static_cast<uint>(granularity);
 
     TRACE("userId=%d,updsiz=%u,type=%d", userId, mUpdateSize, type);
-    scehandle = msceAudioInOpen(
+    sceAudioInOpen_t openfunc{(sonyDataFmt == 2) ? msceAudioInHqOpen : msceAudioInOpen};
+    scehandle = openfunc(
         userId,
         static_cast<uint>(type), 
         0, /* device index:unused */
@@ -558,9 +603,10 @@ void SceAudioInCapture::open(const char *name) {
     }
 
     /*
-        DO NOT overwrite mDevice->BufferSize or UpdateSize here!
-        these are supplied by the user
+        Ensure that the BufferSize is at least large enough to hold one Update.
     */
+    mDevice->UpdateSize = mUpdateSize;
+    mDevice->BufferSize = maxu(mDevice->BufferSize, mUpdateSize);
     mRing = RingBuffer::Create(static_cast<size_t>(mDevice->BufferSize), mFrameSize, false);
 
     /* allocate a bytebuffer to store one update */
