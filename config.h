@@ -89,7 +89,7 @@
 //#define HAVE_OBOE
 
 /* Define if we have the Wave Writer backend */
-//#define HAVE_WAVE
+#define HAVE_WAVE
 
 /* Define if we have the SDL2 backend */
 //#define HAVE_SDL2

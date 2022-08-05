@@ -5,26 +5,19 @@
 import os
 import shutil
 from pathlib import Path
-from typing import Literal
 
 print("> Building OpenAL-Soft for PS4 via OO")
 
 LLVM_BIN_PATH = os.environ.get("OPENALPS4_LLVM_BIN_PATH")
 
 if LLVM_BIN_PATH is None:
-    LLVM_BIN_PATH = "D:/SDK/LLVM10/bin"
+    LLVM_BIN_PATH = "D:\\SDK\\LLVM10\\bin"
 
 # only works with the latest nightly release of the OpenOrbis PS4 Toolchain
 OO_PS4_TOOLCHAIN = os.environ.get("OO_PS4_TOOLCHAIN")
 
 if OO_PS4_TOOLCHAIN is None:
     raise RuntimeError("This script requires the OpenOrbis PS4 toolchain to be installed for this user.")
-
-# optional compilation flags to supply to clang++
-EXTRA_FLAGS = os.environ.get("OPENALPS4_EXTRAFLAGS")
-
-if EXTRA_FLAGS is None:
-    EXTRA_FLAGS = ""
 
 # ALSoft repo directory, usually the script's dir...
 ROOT_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -34,7 +27,7 @@ BUILD_FOLDER_NAME = "ps4"
 BUILD_FOLDER = os.path.join(ROOT_DIR, "build", BUILD_FOLDER_NAME)
 
 # Dependencies: libunwind is auto-merged into libc++ in nightly OO builds for simplicity
-LINK_WITH = "-lc -lc++ -lkernel -lSceAudioOut -lSceAudioIn -lSceUserService"
+LINK_WITH = "-lc -lc++ -lkernel -lSceAudioOut -lSceAudioIn -lSceUserService -lSceSysmodule"
 
 AL_ROOT = ROOT_DIR
 AL_COMMON = os.path.join(ROOT_DIR, "common")
@@ -53,23 +46,29 @@ ELF_PATH = os.path.join(BUILD_FOLDER, FINAL_NAME + ".elf")
 OELF_PATH = os.path.join(BUILD_FOLDER, FINAL_NAME + ".oelf")
 PRX_PATH = os.path.join(BUILD_FOLDER, FINAL_NAME + ".prx")
 ALIB_PATH = os.path.join(BUILD_FOLDER, FINAL_NAME + ".a")
+STUB_PATH = os.path.join(BUILD_FOLDER, FINAL_NAME + ".so")
+
+COMPILER_DEFINES =  " -DORBIS=1 -D__ORBIS__=1 -DPS4=1 -DOO=1 -D__PS4__=1 -DOOPS4=1 -DRESTRICT=__restrict " + \
+                    " -D__BSD_VISIBLE=1 -D_BSD_SOURCE=1 -D_DEBUG=1 -DAL_ALEXT_PROTOTYPES=1 "
+
+COMPILER_WFLAGS  =  " -Winline -Wunused -Wall -Wextra -Wshadow -Wconversion -Wcast-align " + \
+                    " -Wold-style-cast -Wnon-virtual-dtor -Woverloaded-virtual -Wpedantic -Werror "
+
+COMPILER_FFLAGS  =  " -fPIC -fexceptions -fcxx-exceptions -std=c++14 -c "
+
+COMPILER_IFLAGS  = f" -isysroot \"{OO_PS4_TOOLCHAIN}\" -isystem \"{OO_PS4_TOOLCHAIN}/include/c++/v1\" -isystem \"{OO_PS4_TOOLCHAIN}/include\" " + \
+                   f" -I\"{AL_ROOT}\" -I\"{AL_COMMON}\" -I\"{AL_INCLUDE}\" -I\"{AL_HRTF}\" -I\"{AL_ALC}\" "
 
 # use freebsd12 target, define some generic ps4 defines, force exceptions to ON since we have to do that for now
-COMPILER_FLAGS = f" --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -fexceptions -fcxx-exceptions -fuse-init-array -std=c++14 -c " + \
-                 f" {EXTRA_FLAGS} " + \
-                 f" -isysroot {OO_PS4_TOOLCHAIN} -isystem {OO_PS4_TOOLCHAIN}/include/c++/v1 -isystem {OO_PS4_TOOLCHAIN}/include " + \
-                 f" -I {AL_ROOT} -I {AL_COMMON} -I {AL_INCLUDE} -I {AL_HRTF} -I {AL_ALC} " + \
-                 f" -DORBIS=1 -D__ORBIS__=1 -DPS4=1 -DOO=1 -D__PS4__=1 -DOOPS4=1 -DRESTRICT=__restrict " + \
-                 f" -Winline -Wunused -Wall -Wextra -Wshadow -Wconversion -Wcast-align " + \
-                 f" -Wold-style-cast -Wnon-virtual-dtor -Woverloaded-virtual -Wpedantic " + \
-                 f" -D__BSD_VISIBLE=1 -D_BSD_SOURCE=1 -D_DEBUG=1 " + \
-                 f" -DAL_ALEXT_PROTOTYPES=1 "
+COMPILER_FLAGS   = f" --target=x86_64-pc-freebsd12-elf -funwind-tables -fuse-init-array " + \
+                   f" {COMPILER_WFLAGS} {COMPILER_FFLAGS} {COMPILER_IFLAGS} {COMPILER_DEFINES} "
 
 # link with PRX crtlib
-LINKER_FLAGS = f" -m elf_x86_64 -pie --script {OO_PS4_TOOLCHAIN}/link.x " + \
-               f" --eh-frame-hdr -L{OO_PS4_TOOLCHAIN}/lib {LINK_WITH} -o {ELF_PATH} {OO_PS4_TOOLCHAIN}/lib/crtlib.o "
+LINKER_FLAGS = f" -m elf_x86_64 -pie --script \"{OO_PS4_TOOLCHAIN}/link.x\" " + \
+               f" --eh-frame-hdr --verbose -L\"{OO_PS4_TOOLCHAIN}/lib\" {LINK_WITH} -o \"{ELF_PATH}\" \"{OO_PS4_TOOLCHAIN}/lib/crtlib.o\" "
 
 COMPILER_EXE = os.path.join(LLVM_BIN_PATH, "clang++")
+C_COMPILER_EXE = os.path.join(LLVM_BIN_PATH, "clang")
 LINKER_EXE = os.path.join(LLVM_BIN_PATH, "ld.lld")
 AR_EXE = os.path.join(LLVM_BIN_PATH, "llvm-ar")
 TOOL_EXE = os.path.join(OO_PS4_TOOLCHAIN, "bin", "windows", "create-fself")
@@ -85,7 +84,6 @@ common/polyphase_resampler.cpp
 common/ringbuffer.cpp
 common/strutils.cpp
 common/threads.cpp
-
 core/ambdec.cpp
 core/ambidefs.cpp
 core/bformatdec.cpp
@@ -113,7 +111,6 @@ core/uhjfilter.cpp
 core/uiddefs.cpp
 core/voice.cpp
 core/mixer/mixer_c.cpp
-
 al/auxeffectslot.cpp
 al/buffer.cpp
 al/effect.cpp
@@ -139,7 +136,6 @@ al/filter.cpp
 al/listener.cpp
 al/source.cpp
 al/state.cpp
-
 alc/alc.cpp
 alc/alu.cpp
 alc/alconfig.cpp
@@ -160,12 +156,10 @@ alc/effects/pshifter.cpp
 alc/effects/reverb.cpp
 alc/effects/vmorpher.cpp
 alc/panning.cpp
-
 core/mixer/mixer_sse.cpp
 core/mixer/mixer_sse2.cpp
 core/mixer/mixer_sse3.cpp
 core/mixer/mixer_sse41.cpp
-
 alc/backends/base.cpp
 alc/backends/loopback.cpp
 alc/backends/null.cpp
@@ -173,15 +167,16 @@ alc/backends/wave.cpp
 alc/backends/sceaudioout.cpp
 """
 
-# stores paths to .o files that will be linked together
-OBJECTS = []
+# quoted .o paths
+OBJECTS = ""
 
 # the success exit code, usually 0 in most apps
 EXIT_SUCCESS = 0
 
 # Does the linking of all .o files in OBJECTS
 def do_link() -> int:
-    runargs = LINKER_FLAGS + " ".join(OBJECTS)
+    # here OBJECTS is already quoted
+    runargs = f"{LINKER_FLAGS} {OBJECTS}"
     fullline = f"{LINKER_EXE} {runargs}"
 
     print(f"Invoking {fullline}")
@@ -191,7 +186,7 @@ def do_link() -> int:
 
 # Creates a prx out of an elf
 def do_prx() -> int:
-    runargs = f"--paid 0x3800000000000011 --in {ELF_PATH} --out {OELF_PATH} --lib {PRX_PATH}"
+    runargs = f"--paid 0x3800000000000011 --in \"{ELF_PATH}\" --out \"{OELF_PATH}\" --lib \"{PRX_PATH}\""
     fullline = f"{TOOL_EXE} {runargs}"
 
     print(f"Invoking {fullline}")
@@ -201,7 +196,7 @@ def do_prx() -> int:
 
 # Creates an .a static library
 def do_static() -> int:
-    runargs = f"rc {ALIB_PATH} " + " ".join(OBJECTS)
+    runargs = f"rc \"{ALIB_PATH}\" {OBJECTS}"
     fullline = f"{AR_EXE} {runargs}"
 
     print(f"Invoking {fullline}")
@@ -209,16 +204,71 @@ def do_static() -> int:
 
     return ec
 
+# Creates a dummy .c file for a stub library
+def do_so_stub() -> int:
+    include_dir = os.path.join(ROOT_DIR, "include", "AL")
+    files = [
+        os.path.join(include_dir, "al.h"),
+        os.path.join(include_dir, "alc.h"),
+        os.path.join(include_dir, "alext.h"),
+        os.path.join(include_dir, "efx.h")
+    ]
+
+    c_src =  "/* stub autogen start, DO NOT INCLUDE OR USE THIS FILE! */\n"
+    c_src += "#ifdef __cplusplus\nextern \"C\" {\n#endif /* __cplusplus */"
+    c_src += "\n\n"
+
+
+    for filepath in files:
+        with open(filepath, "r") as file:
+            for line in file.readlines():
+                if not line.startswith("ALC_API ") and not line.startswith("AL_API "):
+                    continue
+                namestart = line.index("_APIENTRY") + len("_APIENTRY")
+                nameend = line.index("(")
+                funcname = line[namestart:nameend].strip()
+                c_src += "void " + funcname + "() { for(;;); }\n"
+    
+
+    c_src += "/* stub autogen end */\n"
+    c_src += "#ifdef __cplusplus\n} /* extern \"C\" { */\n#endif /* __cplusplus */"
+    c_src += "\n\n"
+
+    outpath = os.path.join(BUILD_FOLDER, "alsoft_c_stub_source.c")
+    outobjpath = os.path.join(BUILD_FOLDER, "alsoft_c_stub_source.o")
+    with open(outpath, 'w') as file:
+        file.write(c_src)
+
+    runargs =   " -target x86_64-pc-linux-gnu -ffreestanding -nostdlib -fno-builtin -fPIC "
+    runargs += f" -c \"{outpath}\" -o \"{outobjpath}\""
+    fullline = f"{C_COMPILER_EXE} {runargs}"
+    print(f"> Invoking {fullline}")
+    ec = os.system(fullline)
+    if ec != EXIT_SUCCESS:
+        return ec
+
+    runargs =   " -target x86_64-pc-linux-gnu -shared -fuse-ld=lld -ffreestanding -nostdlib -fno-builtin -fPIC "
+    runargs += f" -L\"{OO_PS4_TOOLCHAIN}/lib\" {LINK_WITH} "
+    runargs += f" \"{outobjpath}\" -o \"{STUB_PATH}\""
+    fullline = f"{C_COMPILER_EXE} {runargs}"
+    print(f"> Invoking {fullline}")
+    ec = os.system(fullline)
+
+    return ec
+
 # Returns 0 on success, any other number otherwise
 def run_compiler_at(srcfile: str, objfile: str, params: str) -> int:
-    runargs = f"{params} -o {objfile} {srcfile}"
+    # wtf python?
+    global OBJECTS
+
+    runargs = f"{params} -o \"{objfile}\" \"{srcfile}\""
     fullline = f"{COMPILER_EXE} {runargs}"
 
     print(f"Invoking {fullline}")
     ec = os.system(fullline)
 
     if ec == EXIT_SUCCESS:
-        OBJECTS.append(objfile)
+        OBJECTS += f"\"{objfile}\" "
     
     return ec
 
@@ -261,6 +311,10 @@ def do_build():
         return ec
     
     ec = do_static()
+    if ec != EXIT_SUCCESS:
+        return ec
+
+    ec = do_so_stub()
     if ec != EXIT_SUCCESS:
         return ec
 

@@ -127,7 +127,6 @@ struct SceAudioOutBackend final : public BackendBase {
     uint mUpdateSize{0u};
 
     al::vector<al::byte> mBuffer;
-    std::mutex mMutex;
     std::atomic<bool> mKillNow{true};
     std::thread mThread;
 
@@ -301,6 +300,7 @@ void SceAudioOutBackend::open(const char *name) {
                         alChanFmt = DevFmtStereo;
                         break;
                     }
+                    /* in case of PADSPK fall through the fallback format. */
                 }
 
                 default: {
@@ -330,6 +330,7 @@ void SceAudioOutBackend::open(const char *name) {
                         alChanFmt = DevFmtStereo;
                         break;
                     }
+                    /* in case of PADSPK fall through the fallback format. */
                 }
 
                 default: {
@@ -437,6 +438,7 @@ struct SceAudioInCapture final : public BackendBase {
     SceAudioInCapture(DeviceBase *device) noexcept : BackendBase{device} { }
     ~SceAudioInCapture() override;
 
+    /* AudioIn record thread func */
     int recordProc();
 
     void open(const char *name) override;
@@ -445,6 +447,7 @@ struct SceAudioInCapture final : public BackendBase {
     void captureSamples(al::byte *buffer, uint samples) override;
     uint availableSamples() override;
 
+    /* The output from mCaptureBuffer is written into mRing at once */
     RingBufferPtr mRing{nullptr};
 
     std::atomic<bool> mKillNow{true};
@@ -457,6 +460,7 @@ struct SceAudioInCapture final : public BackendBase {
     uint mFrameSize{};
     uint mUpdateSize{};
 
+    /* stores up to one AudioIn update (or less, if there's less samples) */
     al::vector<al::byte> mCaptureBuffer{};
 
     /*
@@ -615,7 +619,7 @@ void SceAudioInCapture::open(const char *name) {
     mFrameSize = BytesFromDevFmt(mFmtType) * ChannelsFromDevFmt(mFmtChannels, mDevice->mAmbiOrder);
     mUpdateSize = static_cast<uint>(granularity);
 
-    TRACE("userId=%d,updsiz=%u,type=%d", userId, mUpdateSize, type);
+    TRACE("userId=%d,type=%d,updsiz=%u,freq=%u,sonyfmt=%d", userId, type, mUpdateSize, mFrequency, sonyDataFmt);
     sceAudioInOpen_t openfunc{(sonyDataFmt == 2) ? msceAudioInHqOpen : msceAudioInOpen};
     scehandle = openfunc(
         userId,
@@ -729,9 +733,6 @@ std::string SceAudioOutBackendFactory::probe(BackendType type) {
             outnames.append(sname.c_str(), sname.length() + 1);
         }
     }
-
-    /* ??? */
-    outnames.append("\0");
 
     return outnames;
 }
