@@ -748,3 +748,81 @@ BackendPtr SceAudioOutBackendFactory::createBackend(DeviceBase *device, BackendT
     return BackendPtr{};
 }
 
+#ifdef OO
+
+extern "C" {
+    extern void(*__init_array_start[])(void);
+    extern void(*__init_array_end[])(void);
+    extern void(*__fini_array_start[])(void);
+    extern void(*__fini_array_end[])(void);
+    bool __is_initialized{false};
+    bool __is_finalized{false};
+
+    // sce_module_param
+    __asm__(
+    ".intel_syntax noprefix \n"
+    ".align 0x8 \n"
+    ".section \".data.sce_module_param\" \n"
+    "_sceProcessParam: \n"
+        // size
+    "	.quad 	0x18 \n"
+        // magic
+    "	.quad   0x13C13F4BF \n"
+        // SDK version
+    "	.quad 	0x4508101 \n"
+    ".att_syntax prefix \n"
+    );
+
+    // data globals
+    __asm__(
+    ".intel_syntax noprefix \n"
+    ".align 0x8 \n"
+    ".data \n"
+    "__dso_handle: \n"
+    "	.quad 	0 \n"
+    "_sceLibc: \n"
+    "	.quad 	0 \n"
+    ".att_syntax prefix \n"
+    );
+
+    int __attribute__((visibility("default"))) _init() {
+        if (!__is_initialized) {
+            __is_initialized = true;
+
+            for(void(**__i)(void) = __init_array_start; __i != __init_array_end; __i++) {
+                __i[0]();
+            }
+        }
+
+        return 0;
+    }
+
+    int __attribute__((visibility("default"))) _fini() {
+        if (!__is_finalized) {
+            __is_finalized = true;
+
+            for(void(**__i)(void) = __fini_array_start; __i != __fini_array_end; __i++) {
+                __i[0]();
+            }
+        }
+
+        return 0;
+    }
+
+    int __attribute__((visibility("default"))) module_start(unsigned long long args, const void* argp) {
+        std::ignore = args; std::ignore = argp;
+        return _init();
+    }
+
+    int __attribute__((visibility("default"))) module_stop(unsigned long long args, const void* argp) {
+        std::ignore = args; std::ignore = argp;
+        return _fini();
+    }
+
+    int __attribute__((visibility("default"))) _start() {
+        return _init();
+    }
+    
+}
+
+#endif

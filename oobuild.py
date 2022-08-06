@@ -54,7 +54,7 @@ COMPILER_DEFINES =  " -DORBIS=1 -D__ORBIS__=1 -DPS4=1 -DOO=1 -D__PS4__=1 -DOOPS4
 COMPILER_WFLAGS  =  " -Winline -Wunused -Wall -Wextra -Wshadow -Wconversion -Wcast-align " + \
                     " -Wold-style-cast -Wnon-virtual-dtor -Woverloaded-virtual -Wpedantic -Werror "
 
-COMPILER_FFLAGS  =  " -fPIC -fexceptions -fcxx-exceptions -std=c++14 -c "
+COMPILER_FFLAGS  =  " -fPIC -fexceptions -fcxx-exceptions -fvisibility=hidden -std=c++14 -c "
 
 COMPILER_IFLAGS  = f" -isysroot \"{OO_PS4_TOOLCHAIN}\" -isystem \"{OO_PS4_TOOLCHAIN}/include/c++/v1\" -isystem \"{OO_PS4_TOOLCHAIN}/include\" " + \
                    f" -I\"{AL_ROOT}\" -I\"{AL_COMMON}\" -I\"{AL_INCLUDE}\" -I\"{AL_HRTF}\" -I\"{AL_ALC}\" "
@@ -65,7 +65,7 @@ COMPILER_FLAGS   = f" --target=x86_64-pc-freebsd12-elf -funwind-tables -fuse-ini
 
 # link with PRX crtlib
 LINKER_FLAGS = f" -m elf_x86_64 -pie --script \"{OO_PS4_TOOLCHAIN}/link.x\" " + \
-               f" --eh-frame-hdr --verbose -L\"{OO_PS4_TOOLCHAIN}/lib\" {LINK_WITH} -o \"{ELF_PATH}\" \"{OO_PS4_TOOLCHAIN}/lib/crtlib.o\" "
+               f" --eh-frame-hdr --verbose -L\"{OO_PS4_TOOLCHAIN}/lib\" {LINK_WITH} -o \"{ELF_PATH}\" "
 
 COMPILER_EXE = os.path.join(LLVM_BIN_PATH, "clang++")
 C_COMPILER_EXE = os.path.join(LLVM_BIN_PATH, "clang")
