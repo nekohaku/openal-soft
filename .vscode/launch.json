@@ -1,0 +1,13 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Build OpenAL-Soft for OpenOrbis",
+            "type": "python",
+            "request": "launch",
+            "program": "oobuild.py",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}
